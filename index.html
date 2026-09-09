@@ -497,7 +497,7 @@
      Once set here, anyone who opens this file submits to your Sheet automatically —
      no in-app setup needed. Leave blank to configure per-device in the app instead.
      ============================================================ */
-  const DEFAULT_ENDPOINT  = "https://script.google.com/macros/s/AKfycbx-KmSsYRoxEwKXa8YYqWkBMtHZnOermGHaU8cR39cTQI26Tc-89y1hyVoliu0XzFgx/exec";   // e.g. "https://script.google.com/macros/s/AKfy.../exec"
+  const DEFAULT_ENDPOINT  = "https://script.google.com/macros/s/AKfycbxmW69jY5MoT-5-jFW_zo3i0frtZlFUtW2qWaeXSXI7G-taN2JNBBaNxfLtwGYWgFZY/exec";   // e.g. "https://script.google.com/macros/s/AKfy.../exec"
   const DEFAULT_SHEET_URL = "https://docs.google.com/spreadsheets/d/1HE0_pOWgyFwtOt0FnTKr0ZDMRzPsTBqXu2eJymQWbNs/edit?usp=sharing";   // optional: your Google Sheet link (for "Open dashboard")
 
   /* ---------------- storage layer (Claude storage → localStorage → memory) ---------------- */
@@ -1037,20 +1037,21 @@
      loaded once and cached, so each report can be tagged with the exact GRID_ID cells its
      points and polygons fall in — without ever drawing the grid. A point → the cell that
      truly contains it; a polygon → every cell the drawn area actually overlaps. */
-  const GRID_INDEX_URL = 'Tesellas_shark_NH_cells.json';
-  const GRID_INDEX_KEY = 'sde:gridcells';
-  let gcId = null;                 // Array<string> of GRID_IDs
+  const GRID_INDEX_URL = 'TES_EEZ_coast_cells.json';
+  const GRID_INDEX_KEY = 'sde:gridcells2';   // bumped: new index carries GlobalID, so any old cache is replaced
+  let gcId = null;                 // Array<string> GRID_ID
+  let gcGid = null;                // Array<string> GlobalID
   let gcRing = null;               // Array<Float64Array> flat rings [x,y,x,y,...]
   let gcBox = null;                // Float64Array, 4 per cell [w,s,e,n]
   let gcReady = false, gcLoading = false;
 
   function buildGridIndex(rows){
     const n = rows.length;
-    gcId = new Array(n); gcRing = new Array(n); gcBox = new Float64Array(4*n);
+    gcId = new Array(n); gcGid = new Array(n); gcRing = new Array(n); gcBox = new Float64Array(4*n);
     for(let i=0;i<n;i++){
-      const id=rows[i][0], flat=rows[i][1];
+      const id=rows[i][0], gid=rows[i][1], flat=rows[i][2];
       const ring=Float64Array.from(flat);
-      gcId[i]=id; gcRing[i]=ring;
+      gcId[i]=id; gcGid[i]=gid; gcRing[i]=ring;
       let w=Infinity,s=Infinity,e=-Infinity,nn=-Infinity;
       for(let k=0;k<ring.length;k+=2){ const x=ring[k],y=ring[k+1]; if(x<w)w=x; if(x>e)e=x; if(y<s)s=y; if(y>nn)nn=y; }
       gcBox[4*i]=w; gcBox[4*i+1]=s; gcBox[4*i+2]=e; gcBox[4*i+3]=nn;
@@ -1071,7 +1072,7 @@
         buildGridIndex(JSON.parse(text));
         try{ await S.raw.set(GRID_INDEX_KEY, text); }catch(e){} // cache for offline use
       }
-    }catch(e){ /* offline & never cached — GRID_IDs fill in on a later online sync */ }
+    }catch(e){ /* offline & never cached — IDs fill in on a later online sync */ }
     gcLoading = false;
   }
 
@@ -1102,18 +1103,18 @@
     return false;
   }
 
-  // Exact: the cell that truly contains a point.
-  function cellForPoint(lon, lat){
-    if(!gcReady) return null;
+  // Exact: index of the cell that truly contains a point (or -1).
+  function cellIndexForPoint(lon, lat){
+    if(!gcReady) return -1;
     for(let i=0;i<gcId.length;i++){
       const b=4*i;
       if(lon<gcBox[b]||lon>gcBox[b+2]||lat<gcBox[b+1]||lat>gcBox[b+3]) continue;
-      if(pointInFlatRing(lon,lat,gcRing[i])) return gcId[i];
+      if(pointInFlatRing(lon,lat,gcRing[i])) return i;
     }
-    return null;
+    return -1;
   }
-  // Exact: every cell the drawn polygon actually overlaps (bbox-prefiltered).
-  function cellsForPolygon(ringPts, out){
+  // Exact: indices of every cell the drawn polygon actually overlaps (bbox-prefiltered).
+  function cellIndicesForPolygon(ringPts, out){
     if(!gcReady || !ringPts || ringPts.length<3) return;
     const flat=new Float64Array(ringPts.length*2);
     let w=Infinity,s=Infinity,e=-Infinity,n=-Infinity;
@@ -1121,15 +1122,15 @@
     for(let i=0;i<gcId.length;i++){
       const b=4*i;
       if(gcBox[b+2]<w||gcBox[b]>e||gcBox[b+3]<s||gcBox[b+1]>n) continue; // bbox miss
-      if(ringsIntersect(gcRing[i], flat)) out.add(gcId[i]);
+      if(ringsIntersect(gcRing[i], flat)) out.add(i);
     }
   }
-  // Full set of exact GRID_IDs a report's geometry touches (points + polygon overlap).
-  function computeGridIds(geom){
+  // Indices of all exact cells a report's geometry touches (points + polygon overlap).
+  function computeGridCells(geom){
     if(!gcReady || !geom) return null;
     const out = new Set();
-    const pt = (c)=>{ const id=cellForPoint(c[0],c[1]); if(id) out.add(id); };
-    const poly = (rings)=>{ if(rings && rings.length) cellsForPolygon(rings[0], out); };
+    const pt = (c)=>{ const i=cellIndexForPoint(c[0],c[1]); if(i>=0) out.add(i); };
+    const poly = (rings)=>{ if(rings && rings.length) cellIndicesForPolygon(rings[0], out); };
     const walk = (g)=>{
       if(!g) return;
       if(g.type==='Point') pt(g.coordinates);
@@ -1139,8 +1140,17 @@
       else if(g.type==='GeometryCollection') (g.geometries||[]).forEach(walk);
     };
     walk(geom);
-    return Array.from(out);
+    return out;
   }
+  // { gridIds:[...GRID_ID], globalIds:[...GlobalID] } for a report geometry (null if index not ready).
+  function computeGridTags(geom){
+    const cells = computeGridCells(geom);
+    if(!cells) return null;
+    const gridIds=[], globalIds=[];
+    cells.forEach(i=>{ gridIds.push(gcId[i]); globalIds.push(gcGid[i]); });
+    return { gridIds, globalIds };
+  }
+
 
 
   // Commit the in-progress area to the report's set and keep working.
@@ -1473,6 +1483,7 @@
     // Hidden sections: keep whatever the form shows, else preserve the existing value.
     const keep = (id, prev) => { const el=document.getElementById(id); return el ? el.value : (prev!=null?prev:''); };
     const keepT = (id, prev) => String(keep(id, prev)).trim();
+    const _tags = src ? null : computeGridTags(pending.geometry); // exact cells the shapes fall in
     const entry = {
       id: editingId || ('e'+Date.now().toString(36)+Math.random().toString(36).slice(2,6)),
       createdAt: src ? src.createdAt : new Date().toISOString(),
@@ -1484,7 +1495,8 @@
       areaCount: src ? src.areaCount : (pending ? pending.areaCount : undefined),
       pointCount: src ? src.pointCount : (pending ? pending.pointCount : undefined),
       hexId: src ? src.hexId : (pending ? pending.hexId : undefined),
-      gridIds: src ? (src.gridIds||null) : computeGridIds(pending.geometry), // GRID_IDs the shapes fall in (null if index not ready yet → filled on sync)
+      gridIds: src ? (src.gridIds||null) : (_tags?_tags.gridIds:null),     // GRID_ID list (null if index not ready → filled on sync)
+      globalIds: src ? (src.globalIds||null) : (_tags?_tags.globalIds:null), // GlobalID GUIDs for the same cells
       shark: keep('fShark', src&&src.shark), sharkOther: keepT('fSharkOther', src&&src.sharkOther),
       target: keep('fTarget', src&&src.target), targetOther: keepT('fTargetOther', src&&src.targetOther),
       outcome: keep('fOutcome', src&&src.outcome),
@@ -1645,12 +1657,12 @@
     toast('Exported '+entries.length+' events');
   }
   function toCSV(){
-    const cols=['id','datetime','participant_id','geom_type','grid_ids','grid_id_count','latitude','longitude','shark_species','target_species','outcome','fish_depredated','gear','depth_ft','reporter','vessel','photo_count','notes'];
+    const cols=['id','datetime','participant_id','geom_type','grid_ids','grid_id_count','global_ids','latitude','longitude','shark_species','target_species','outcome','fish_depredated','gear','depth_ft','reporter','vessel','photo_count','notes'];
     const q=v=>{ v=String(v==null?'':v); return /[",\n]/.test(v)?'"'+v.replace(/"/g,'""')+'"':v; };
     const lines=[cols.join(',')];
     for(const e of entries){
       lines.push([
-        e.id, e.datetime, e.participantId||'', e.geomType, (e.gridIds||[]).join(';'), (e.gridIds||[]).length, e.center[0].toFixed(6), e.center[1].toFixed(6),
+        e.id, e.datetime, e.participantId||'', e.geomType, (e.gridIds||[]).join(';'), (e.gridIds||[]).length, (e.globalIds||[]).join(';'), e.center[0].toFixed(6), e.center[1].toFixed(6),
         displayShark(e), displayTarget(e), e.outcome||'', e.numLost||'', e.gear||'', e.depth||'',
         e.reporter||'', e.vessel||'', (e.photos?e.photos.length:0), e.notes||''
       ].map(q).join(','));
@@ -1665,7 +1677,7 @@
         geometry:e.geometry,
         properties:{
           id:e.id, datetime:e.datetime, participant_id:e.participantId||null, geom_type:e.geomType,
-          grid_ids:e.gridIds||[], grid_id_count:(e.gridIds||[]).length,
+          grid_ids:e.gridIds||[], grid_id_count:(e.gridIds||[]).length, global_ids:e.globalIds||[],
           shark_species:displayShark(e), target_species:displayTarget(e),
           outcome:e.outcome||null, fish_depredated:e.numLost||null,
           gear:e.gear||null, depth_ft:e.depth||null,
@@ -1772,6 +1784,7 @@
       id:e.id, participant_id:e.participantId||'', datetime:e.datetime||'', created_at:e.createdAt||'',
       geom_type:e.geomType||'',
       grid_ids:(e.gridIds||[]).join(';'), grid_id_count:(e.gridIds||[]).length,
+      global_ids:(e.globalIds||[]).join(';'),
       latitude:e.center?e.center[0]:'', longitude:e.center?e.center[1]:'',
       shark_species:displayShark(e), target_species:displayTarget(e),
       outcome:e.outcome||'', fish_depredated:e.numLost||'', gear:e.gear||'', depth_ft:e.depth||'',
@@ -1781,10 +1794,10 @@
   }
   async function syncEntry(e){
     if(!SUBMIT_ENDPOINT) return false;
-    // Fill in GRID_IDs if they couldn't be computed at save time (index not yet loaded / logged offline).
+    // Fill in the cell IDs if they couldn't be computed at save time (index not yet loaded / logged offline).
     if((!e.gridIds || !e.gridIds.length) && e.geometry){
       if(!gcReady) { try{ await loadGridIndex(); }catch(x){} }
-      const g=computeGridIds(e.geometry); if(g && g.length){ e.gridIds=g; try{ await S.set(e.id,e); }catch(x){} }
+      const t=computeGridTags(e.geometry); if(t && t.gridIds.length){ e.gridIds=t.gridIds; e.globalIds=t.globalIds; try{ await S.set(e.id,e); }catch(x){} }
     }
     // plain-text body keeps this a "simple" CORS request (no preflight)
     const res=await fetch(SUBMIT_ENDPOINT,{ method:'POST', body:JSON.stringify(toPayload(e)) });
@@ -1817,7 +1830,7 @@
     "// The ID is the long part of the Sheet URL:  /d/THIS_LONG_ID/edit",
     "var SHEET_ID='';",
     "var SHEET_NAME='Reports', PHOTO_FOLDER='Shark Depredation Photos';",
-    "var HEADERS=['received_at','id','participant_id','datetime','geom_type','grid_ids','grid_id_count',",
+    "var HEADERS=['received_at','id','participant_id','datetime','geom_type','grid_ids','grid_id_count','global_ids',",
     "  'latitude','longitude','shark_species','target_species','outcome','fish_depredated',",
     "  'gear','depth_ft','reporter','vessel','notes','photo_links','geometry_geojson'];",
     "function getSS_(){",
@@ -1849,7 +1862,7 @@
     "        f.setSharing(DriveApp.Access.ANYONE_WITH_LINK,DriveApp.Permission.VIEW);",
     "        links.push(f.getUrl());",
     "      }catch(err){ links.push('ERROR'); } } }",
-    "    sh.appendRow([new Date(),id,d.participant_id||'',d.datetime||'',d.geom_type||'',(Array.isArray(d.grid_ids)?d.grid_ids.join(';'):(d.grid_ids||'')),(d.grid_id_count||0),",
+    "    sh.appendRow([new Date(),id,d.participant_id||'',d.datetime||'',d.geom_type||'',(Array.isArray(d.grid_ids)?d.grid_ids.join(';'):(d.grid_ids||'')),(d.grid_id_count||0),(Array.isArray(d.global_ids)?d.global_ids.join(';'):(d.global_ids||'')),",
     "      d.latitude||'',d.longitude||'',d.shark_species||'',d.target_species||'',d.outcome||'',",
     "      d.fish_depredated||'',d.gear||'',d.depth_ft||'',d.reporter||'',d.vessel||'',d.notes||'',",
     "      links.join('\\n'),JSON.stringify(d.geometry||null)]);",
