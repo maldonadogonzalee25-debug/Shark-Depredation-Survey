@@ -424,7 +424,7 @@
     <div class="map-tools">
       <div class="tool-group" id="gridGroup">
         <div class="gl">Report a depredation</div>
-        <div class="report-tip"><span class="hexmark"></span> <span id="reportTip">Tap the map to trace an area</span></div>
+        <div class="report-tip"><span class="hexmark"></span> Please select whether to draw an area or drop a single point</div>
         <div class="mode-seg" id="modeSeg">
           <button type="button" class="mode-opt active" id="modeArea" data-mode="area">▱ Area</button>
           <button type="button" class="mode-opt" id="modePoint" data-mode="point">• Point</button>
@@ -567,12 +567,13 @@
   /* ---------------- map ---------------- */
   // Pan/zoom limited to North Carolina waters and EEZ (matches the tessellation extent):
   // latitudes 31°N–37°N, out to ~71.2°W offshore.
-  const NC_BOUNDS = L.latLngBounds([[31, -81.3], [37, -71.2]]);
+  // Pan/zoom limited to North Carolina waters and its EEZ (Georgia & Florida excluded).
+  const NC_BOUNDS = L.latLngBounds([[33.5, -79.0], [36.8, -71.2]]);
   const map = L.map('map', {
     zoomControl:true, preferCanvas:true,
     maxBounds: NC_BOUNDS, maxBoundsViscosity: 1.0,
-    minZoom: 5, maxZoom: 18
-  }).setView([34, -75.5], 6);
+    minZoom: 6, maxZoom: 18
+  }).setView([35.0, -75.6], 7);
 
   // NOAA cached chart tiles. This cache's level 0 == standard web-mercator zoom 2,
   // so tiles are requested with zoomOffset -2 (URL level = mapZoom - 2, x/y at mapZoom).
@@ -936,7 +937,6 @@
     modeAreaBtn.classList.toggle('active', mode==='area');
     modePointBtn.classList.toggle('active', mode==='point');
     btnFinish.style.display = (mode==='area') ? '' : 'none';
-    reportTipEl.textContent = TIP[mode];
     gridHintEl.innerHTML = HINT[mode];
     redrawDraw();
   }
@@ -1335,7 +1335,7 @@
     modal.innerHTML =
     '<div class="modal-head">'+
       '<div class="mh-ic '+(isArea?'poly':'')+'">'+geomIcon+'</div>'+
-      '<div><h3>'+(editingId?'Edit event':'New depredation event')+'</h3>'+
+      '<div><h3>'+(editingId?'Edit event':'Shark depredation events')+'</h3>'+
       '<div class="mh-sub">'+geomSub+'</div></div>'+
       '<button class="x" id="mClose" aria-label="Close">×</button>'+
     '</div>'+
@@ -1399,7 +1399,7 @@
       (editingId?'':'<button class="btn btn-ghost" id="mCancel">Discard</button>')+
       (editingId?'<button class="btn btn-danger" id="mDelete">Delete</button>':'')+
       '<div class="grow"></div>'+
-      '<button class="btn btn-primary" id="mSave">'+(editingId?'Save changes':'Log event')+'</button>'+
+      '<button class="btn btn-primary" id="mSave">'+(editingId?'Save changes':'Submit map')+'</button>'+
     '</div>';
 
     openModal();
@@ -1523,7 +1523,7 @@
       updateSyncUI();
       if(SUBMIT_ENDPOINT) syncAll(true); // send in the background
     }catch(err){
-      btn.disabled=false; btn.textContent='Log event';
+      btn.disabled=false; btn.textContent=(editingId?'Save changes':'Submit map');
       if(String(err&&err.message||err).length){
         toast('Save failed — the photos may be too large. Try fewer / smaller images.');
       } else { toast('Could not save the event'); }
@@ -1965,19 +1965,16 @@
       '<button class="x" id="wClose" aria-label="Close">×</button>'+
     '</div>'+
     '<div class="modal-body">'+
-      '<p class="wlead">Report where sharks <b>took or damaged your catch</b>. Mark the spot on the nautical chart — as a <b>point</b>, or by tracing the general <b>area</b> — and tag it with your survey code, so researchers can match it to the paper survey and map where depredation happens most.</p>'+
+      '<p class="wlead">Report where sharks <b>took or damaged your catch</b>. Mark the spot on the nautical chart — as a <b>point</b>, or by tracing the general <b>area</b> — and tag it with your survey ID, so researchers can match it to the paper survey and map where depredation happens most.</p>'+
       '<div class="wsteps">'+
-        '<div class="wstep"><div class="wn">1</div><div class="wt"><b>Set your code</b> below — enter the survey ID we gave you.</div></div>'+
+        '<div class="wstep"><div class="wn">1</div><div class="wt"><b>Enter your Survey ID below.</b> The Survey ID can be found on the cover page of your mailed survey.</div></div>'+
         '<div class="wstep"><div class="wn">2</div><div class="wt"><b>Pick how to mark it.</b> Use the <b>Point</b> / <b>Area</b> switch on the map:<br>• <b>Point</b> — each tap drops a single spot. Drop as many as you like.<br>• <b>Area</b> — tap 3+ corners to outline a zone, then press <b>Add area</b>. Repeat for more zones.</div></div>'+
-        '<div class="wstep"><div class="wn">3</div><div class="wt"><b>Mix freely, then finish.</b> One report can hold several points and areas together. <b>Undo</b> removes the last thing you placed; <b>Clear</b> starts over. Press <b>Done</b> when the map looks right.</div></div>'+
-        '<div class="wstep"><div class="wn">4</div><div class="wt"><b>Confirm and log.</b> Check the participant code, add any notes, and log the event. The date is recorded automatically.</div></div>'+
-        '<div class="wstep"><div class="wn">5</div><div class="wt">'+
-          (SUBMIT_ENDPOINT
-            ? '<b>That’s it — it sends itself.</b> Reports upload to the research team automatically when you’re online. No signal? They wait and send later.'
-            : '<b>Export when done.</b> Use <b>Export</b> (top right) to download your reports as CSV or GeoJSON.')+
+        '<div class="wstep"><div class="wn">3</div><div class="wt"><b>Review points and areas, then finish.</b> Press <b>Done</b> when the map looks right.</div></div>'+
+        '<div class="wstep"><div class="wn">4</div><div class="wt">'+
+          (SUBMIT_ENDPOINT ? '<b>That’s it — it sends itself.</b>' : '<b>Export when done.</b>')+
         '</div></div>'+
       '</div>'+
-      '<div class="field" style="margin-top:2px"><label>Your participant / survey code</label>'+
+      '<div class="field" style="margin-top:2px"><label>Your Survey ID</label>'+
         '<input type="text" id="wPart" value="'+esc(participantId)+'" placeholder="Enter your survey ID" autocomplete="off">'+
         '<div class="hint">Every report is stamped with this ID. You can change it later from the person icon up top.</div></div>'+
       '<div class="wfoot"><b>Note:</b> '+
